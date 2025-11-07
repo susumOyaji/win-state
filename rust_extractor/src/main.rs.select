@@ -1,0 +1,116 @@
+use serde_json::Value;
+use regex::Regex;
+use std::error::Error;
+
+#[derive(Debug)]
+struct Candidate<'a> {
+    kind: &'static str,
+    path: String,
+    value: &'a Value,
+    score: f32,
+}
+
+fn walk_json<'a>(v: &'a Value, path: String, results: &mut Vec<Candidate<'a>>) {
+    match v {
+        Value::Object(map) => {
+            for (k, val) in map {
+                let new_path = if path.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{}/{}", path, k)
+                };
+                walk_json(val, new_path, results);
+            }
+        }
+        Value::Array(arr) => {
+            for (i, val) in arr.iter().enumerate() {
+                walk_json(val, format!("{}/[{}]", path, i), results);
+            }
+        }
+        _ => classify_and_score(path, v, results),
+    }
+}
+
+fn classify_and_score<'a>(path: String, value: &'a Value, results: &mut Vec<Candidate<'a>>) {
+    let s = match value {
+        Value::String(s) => s.trim().to_string(),
+        Value::Number(n) => n.to_string(),
+        _ => return,
+    };
+
+    // 🔸 除外ワード（過去データなど）
+    let excluded = ["lowPrice", "highPrice", "previousClose"];
+    if excluded.iter().any(|&w| path.contains(w)) {
+        return;
+    }
+
+    // 🔸 正規表現
+    let re_unsigned = Regex::new(r"^\d+(\.\d+)?$").unwrap();     // 符号なし数値
+    let re_signed = Regex::new(r"^[+-]\d+(\.\d+)?$").unwrap();   // 符号付き数値
+    let re_percent = Regex::new(r"^[+-]?\d+(\.\d+)?%$").unwrap(); // ％付き
+    let re_time = Regex::new(r"^\d{2}:\d{2}$").unwrap();         // hh:mm形式
+
+    let mut score = 0.0;
+
+    // 🔹 構造スコア補正
+    if path.contains("priceBoard") || path.contains("mainStocks") {
+        score += 0.5;
+    }
+
+    // 🔹 値の分類とスコア
+    if re_percent.is_match(&s) {
+        let kind = "Change%";
+        if path.contains("priceChangeRate") {
+            score += 0.5; // 語彙補正
+        }
+        results.push(Candidate { kind, path, value, score });
+    } else if re_signed.is_match(&s) {
+        results.push(Candidate { kind: "Change", path, value, score });
+    } else if re_unsigned.is_match(&s) {
+        results.push(Candidate { kind: "Price", path, value, score });
+    } else if re_time.is_match(&s) {
+        results.push(Candidate { kind: "Time", path, value, score });
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    let url = "https://finance.yahoo.co.jp/quote/5016.T";
+    let body = reqwest::get(url).await?.text().await?;
+
+    let re = Regex::new(r"(?s)window\.__PRELOADED_STATE__\s*=\s*(.*?)</script>")?;
+    if let Some(caps) = re.captures(&body) {
+        if let Some(json_str_match) = caps.get(1) {
+            let mut json_str = json_str_match.as_str().trim();
+            if json_str.ends_with(';') {
+                json_str = &json_str[..json_str.len() - 1];
+            }
+
+            let data: Value = serde_json::from_str(json_str)?;
+            let mut results = vec![];
+            walk_json(&data, "".into(), &mut results);
+
+            // 🔸 種別ごとに最高スコアを抽出
+            let get_best = |kind: &str| {
+                results.iter()
+                    .filter(|c| c.kind == kind)
+                    .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap())
+                    .map(|c| (c.path.clone(), c.value.clone()))
+            };
+
+            let price = get_best("Price");
+            let change = get_best("Change");
+            let change_percent = get_best("Change%");
+            let time = get_best("Time");
+
+            println!("==============================");
+            println!("💴 Price: {:?}", price);
+            println!("📉 Change: {:?}", change);
+            println!("📊 Change%: {:?}", change_percent);
+            println!("🕒 Time: {:?}", time);
+            println!("==============================");
+        }
+    }
+
+    Ok(())
+}

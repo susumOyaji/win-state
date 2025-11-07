@@ -26,7 +26,7 @@ fn print_keys(value: &Value, prefix: &str) {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn mainkey() -> Result<(), Box<dyn Error>> {
     let url = "https://finance.yahoo.co.jp/quote/5016.T";
     let body = reqwest::get(url).await?.text().await?;
 
