@@ -19,6 +19,8 @@ struct DataSource {
     change_rate_key: &'static str,
     /// The key for the update time.
     time_key: &'static str,
+    /// Whether to strip the market suffix (e.g., .T) before comparison.
+    strip_suffix: bool,
 }
 
 /// A struct to hold the normalized data extracted from any data source.
@@ -73,6 +75,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             change_key: "priceChange",
             change_rate_key: "priceChangeRate",
             time_key: "priceDateTime",
+            strip_suffix: true,
         },
         // For currencies and indices
         DataSource {
@@ -83,16 +86,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
             change_key: "priceChange", // Note: This key might not exist here, handled below
             change_rate_key: "priceChangeRate", // Note: This key might not exist here
             time_key: "priceUpdateTime",
+            strip_suffix: false,
         },
-        // A possible alternative for indices (based on currency structure)
+        // For domestic indices like 998407.O (Nikkei 225)
         DataSource {
-            path: &["mainIndexPriceBoard", "indexPrices"], // Hypothetical path
-            code_key: "indexCode",
-            name_key: "indexName",
+            path: &["mainDomesticIndexPriceBoard", "indexPrices"],
+            code_key: "code",
+            name_key: "name",
             price_key: "price",
-            change_key: "priceChange",
-            change_rate_key: "priceChangeRate",
-            time_key: "priceDateTime",
+            change_key: "changePrice",
+            change_rate_key: "changePriceRate",
+            time_key: "japanUpdateTime",
+            strip_suffix: false,
         },
     ];
 
@@ -101,7 +106,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             continue;
         }
 
-        let url = if code.starts_with('^') || code.contains('=') {
+        let url = if code.starts_with('^') || code.contains('=') || code.ends_with(".T") || code.ends_with(".O") {
             format!("https://finance.yahoo.co.jp/quote/{}/", code)
         } else {
             format!("https://finance.yahoo.co.jp/quote/{}.T/", code)
@@ -132,8 +137,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 for source in &data_sources {
                     if let Some(target_obj) = find_object(&data, source.path) {
                         if let Some(found_code) = get_string_value(target_obj, source.code_key) {
-                            if found_code.trim() == code {
-                                // Found the right object, now normalize it
+                                                            let code_to_compare = if source.strip_suffix {
+                                                                code.split('.').next().unwrap_or(code)
+                                                            } else {
+                                                                code
+                                                            };
+                            
+                                                            if found_code.trim() == code_to_compare {                                // Found the right object, now normalize it
                                 normalized_data = Some(NormalizedData {
                                     code: found_code,
                                     name: get_string_value(target_obj, source.name_key).unwrap_or("N/A"),
