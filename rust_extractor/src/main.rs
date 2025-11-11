@@ -14,6 +14,10 @@ struct Args {
     /// Keys that the target object must contain. Can be specified multiple times.
     #[arg(long = "key", required = true)]
     keys: Vec<String>,
+
+    /// Keys to display from the found object. Can be specified multiple times.
+    #[arg(long = "display-key")]
+    display_keys: Vec<String>,
 }
 
 /// Recursively finds paths to objects that contain all the specified keys.
@@ -168,6 +172,41 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let indent_step = "  ";
                 for (i, key) in path.iter().enumerate() {
                     println!("{}{:?}: {{", indent_step.repeat(i), key);
+                }
+
+                let inner_indent_str = indent_step.repeat(path.len());
+                if let Value::Object(map) = target_obj {
+                    println!("{}// --- Extracted Values ---", inner_indent_str);
+
+                    if args.display_keys.is_empty() {
+                        // If no display keys are specified, print all values
+                        for (key, value) in map {
+                            let value_str = match value {
+                                Value::Null => "null".to_string(),
+                                Value::String(s) => format!("\"{}\"", s),
+                                Value::Object(_) => "{ ... }".to_string(),
+                                Value::Array(_) => "[ ... ]".to_string(),
+                                _ => value.to_string(),
+                            };
+                            println!("{}{} = {};", indent_step.repeat(path.len() + 1), key, value_str);
+                        }
+                    } else {
+                        // If display keys are specified, print only those
+                        for key in &args.display_keys {
+                            if let Some(value) = map.get(key) {
+                                let value_str = match value {
+                                    Value::Null => "null".to_string(),
+                                    Value::String(s) => format!("\"{}\"", s),
+                                    Value::Object(_) => "{ ... }".to_string(),
+                                    Value::Array(_) => "[ ... ]".to_string(),
+                                    _ => value.to_string(),
+                                };
+                                println!("{}{} = {};", indent_step.repeat(path.len() + 1), key, value_str);
+                            }
+                        }
+                    }
+
+                    println!("{}// --- Struct Definition ---", inner_indent_str);
                 }
 
                 let defs_to_print = generate_structs(&struct_name, target_obj, &mut all_defs);
