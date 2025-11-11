@@ -2,6 +2,7 @@ use clap::Parser;
 use regex::Regex;
 use serde_json::{Map, Value};
 use std::error::Error;
+use scraper::{Html, Selector};
 
 /// A struct to define a data source for financial data within the JSON.
 struct DataSource {
@@ -24,13 +25,13 @@ struct DataSource {
 }
 
 /// A struct to hold the normalized data extracted from any data source.
-struct NormalizedData<'a> {
-    code: &'a str,
-    name: &'a str,
+struct NormalizedData {
+    code: String,
+    name: String,
     price: String,
     price_change: String,
     price_change_rate: String,
-    update_time: &'a str,
+    update_time: String,
 }
 
 /// Command line arguments for the application.
@@ -57,6 +58,31 @@ fn find_object<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Map<String, Va
 /// Extracts a string value from a JSON object, trimming quotes.
 fn get_string_value<'a>(obj: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
     obj.get(key)?.as_str()
+}
+
+/// Recursively finds paths to objects that contain all the specified keys.
+fn find_object_paths<'a>(
+    value: &'a Value,
+    keys_to_find: &[String],
+    current_path: &mut Vec<&'a str>,
+    found_paths: &mut Vec<Vec<&'a str>>,
+) {
+    if let Value::Object(map) = value {
+        let has_all_keys = keys_to_find.iter().all(|key| map.contains_key(key));
+        if has_all_keys {
+            found_paths.push(current_path.clone());
+        }
+
+        for (key, nested_value) in map.iter() {
+            current_path.push(key);
+            find_object_paths(nested_value, keys_to_find, current_path, found_paths);
+            current_path.pop(); // Backtrack
+        }
+    } else if let Value::Array(arr) = value {
+        for nested_value in arr {
+            find_object_paths(nested_value, keys_to_find, current_path, found_paths);
+        }
+    }
 }
 
 #[tokio::main]
@@ -145,12 +171,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             
                                                             if found_code.trim() == code_to_compare {                                // Found the right object, now normalize it
                                 normalized_data = Some(NormalizedData {
-                                    code: found_code,
-                                    name: get_string_value(target_obj, source.name_key).unwrap_or("N/A"),
+                                    code: found_code.to_string(),
+                                    name: get_string_value(target_obj, source.name_key).unwrap_or("N/A").to_string(),
                                     price: target_obj.get(source.price_key).map_or("N/A".to_string(), |v| v.to_string().trim_matches('"').to_string()),
                                     price_change: target_obj.get(source.change_key).map_or("N/A".to_string(), |v| v.to_string().trim_matches('"').to_string()),
                                     price_change_rate: target_obj.get(source.change_rate_key).map_or("N/A".to_string(), |v| v.to_string().trim_matches('"').to_string()),
-                                    update_time: get_string_value(target_obj, source.time_key).unwrap_or("N/A"),
+                                    update_time: get_string_value(target_obj, source.time_key).unwrap_or("N/A").to_string(),
                                 });
                                 break; // Stop searching once found
                             }
@@ -158,6 +184,37 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
                 
+                // If no data found with specific paths, fallback to generic key search
+                if normalized_data.is_none() {
+                    println!("-> Could not find data in known locations. Falling back to generic key search.");
+                    let fallback_keys = vec!["code".to_string(), "name".to_string()];
+                    let mut found_paths = Vec::new();
+                    find_object_paths(&data, &fallback_keys, &mut Vec::new(), &mut found_paths);
+
+                    for path in found_paths {
+                        let mut target_obj = &data;
+                        for &key in &path {
+                            target_obj = &target_obj[key];
+                        }
+                        if let Some(obj_map) = target_obj.as_object() {
+                            if let Some(found_code) = get_string_value(obj_map, "code") {
+                                let code_to_compare = code.split('.').next().unwrap_or(code);
+                                if found_code.trim() == code_to_compare {
+                                    normalized_data = Some(NormalizedData {
+                                        code: found_code.to_string(),
+                                        name: get_string_value(obj_map, "name").unwrap_or("N/A").to_string(),
+                                        price: obj_map.get("price").map_or("N/A".to_string(), |v| v.to_string().trim_matches('"').to_string()),
+                                        price_change: obj_map.get("priceChange").map_or("N/A".to_string(), |v| v.to_string().trim_matches('"').to_string()),
+                                        price_change_rate: obj_map.get("priceChangeRate").map_or("N/A".to_string(), |v| v.to_string().trim_matches('"').to_string()),
+                                        update_time: obj_map.get("priceDateTime").map_or("N/A".to_string(), |v| v.to_string().trim_matches('"').to_string()),
+                                    });
+                                    break; // Found it, no need to check other paths
+                                }
+                            }
+                        }
+                    }
+                }
+
                 println!("----------------------------------------");
                 if let Some(d) = normalized_data {
                     println!("{:<18}: {}", "Code", d.code);
@@ -175,7 +232,35 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 println!("-> Could not find JSON data in the script tag for code {}.", code);
             }
         } else {
-            println!("-> Could not find __PRELOADED_STATE__ script tag for code {}.", code);
+            // Fallback to DOM scraping if __PRELOADED_STATE__ is not found
+            println!("-> __PRELOADED_STATE__ not found. Falling back to DOM scraping for {}.", code);
+            let document = Html::parse_document(&body);
+
+            // Selectors for index data (based on Yahoo Finance Japan's structure for indices)
+            let name_selector = Selector::parse("h1").unwrap();
+            let price_selector = Selector::parse("div[class*='_CommonPriceBoard__priceBlock'] span[class*='_StyledNumber__value']").unwrap();
+            let change_selector = Selector::parse("span[class*='_PriceChangeLabel__primary'] span[class*='_StyledNumber__value']").unwrap();
+            let change_rate_selector = Selector::parse("span[class*='_PriceChangeLabel__secondary'] span[class*='_StyledNumber__value']").unwrap();
+            let time_selector = Selector::parse("span[class*='_Time'], time[class*='timestamp']").unwrap();
+
+            let name = document.select(&name_selector).next().map(|el| el.text().collect::<String>().trim().to_string()).unwrap_or("N/A".to_string());
+            let price = document.select(&price_selector).next().map(|el| el.text().collect::<String>().trim().to_string()).unwrap_or("N/A".to_string());
+            let price_change = document.select(&change_selector).next().map(|el| el.text().collect::<String>().trim().to_string()).unwrap_or("N/A".to_string());
+            let price_change_rate = document.select(&change_rate_selector).next().map(|el| el.text().collect::<String>().trim().to_string()).unwrap_or("N/A".to_string());
+            let update_time = document.select(&time_selector).next().map(|el| el.text().collect::<String>().trim().to_string()).unwrap_or("N/A".to_string());
+
+            println!("----------------------------------------");
+            if name != "N/A" && price != "N/A" {
+                println!("{:<18}: {}", "Code", code);
+                println!("{:<18}: {}", "Name", name);
+                println!("{:<18}: {}", "Price", price);
+                println!("{:<18}: {}", "Change", price_change);
+                println!("{:<18}: {}", "Change (Rate)", price_change_rate);
+                println!("{:<18}: {}", "Time", update_time);
+            } else {
+                println!("-> Failed to scrape data from DOM for code '{}'.", code);
+            }
+            println!("----------------------------------------");
         }
     }
 
