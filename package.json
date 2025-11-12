@@ -5,6 +5,7 @@
 	"scripts": {
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev",
+		"dev:yf_quote": "wrangler dev --config wrangler.yf_quote.toml",
 		"start": "wrangler dev",
 		"test": "vitest"
 	},

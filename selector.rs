@@ -236,7 +236,7 @@ async fn discover_data(code: &str) -> Result<DiscoveredData> {
         }
     }
 
-    // Update Time
+    // Update Time _CommonPriceBoard__time_1g7gt_55
     for selector_str in &["ul[class*='PriceBoard__times'] time", "time[class*='timestamp']"] {
         if let Ok(sel) = Selector::parse(selector_str) {
             for element in document.select(&sel) {

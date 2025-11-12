@@ -1,0 +1,61 @@
+###
+# Variables
+#
+# The base URL for the local development server.
+# Run `wrangler dev` to start the server.
+@baseUrl = http://127.0.0.1:8787
+
+###
+# Health Check
+#
+# Checks if the worker is running.
+GET {{baseUrl}}/health
+
+###
+# Get Quote Data (Dynamic Scraping)
+#
+# Fetches stock data for one or more codes.
+# Codes can be for regular stocks (e.g., 9984.T), indexes (e.g., ^DJI), or currencies (e.g., USDJPY=X).
+GET {{baseUrl}}/quote?code=9984.T,^DJI,USDJPY=X
+
+###
+# Discover Data Candidates
+#
+# Analyzes a page and returns potential candidates for each data point (name, price, etc.).
+# This is useful for debugging the "auto select" logic.
+#
+# Example for a regular stock:
+GET {{baseUrl}}/discover-data?code=7203.T
+
+###
+# Example for an index:
+GET {{baseUrl}}/discover-data?code=^DJI
+
+###
+# Example for a currency:
+GET {{baseUrl}}/discover-data?code=USDJPY=X
+
+###
+# Get Data from yf_quote_worker
+#
+# Fetches stock data using the newly created yf_quote_worker.
+# This worker responds to the root path.
+GET {{baseUrl}}/?code=7203.T,^DJI,USDJPY=X
+
+###
+# Generate CSS Selectors
+#
+# Generates potential CSS selectors for a given text on a given URL.
+# This helps in finding a stable selector for a piece of data.
+@targetUrl = https://finance.yahoo.co.jp/quote/9984.T
+@targetText = ソフトバンクグループ（株）
+GET {{baseUrl}}/generate-selectors?url={{targetUrl}}&text={{targetText}}
+
+###
+# Verify a CSS Selector
+#
+# Checks if a given CSS selector finds any elements on a URL and returns the matches.
+@verifyUrl = https://finance.yahoo.co.jp/quote/9984.T
+@verifySelector = h1
+GET {{baseUrl}}/verify-selector?url={{verifyUrl}}&selector={{verifySelector}}
+

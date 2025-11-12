@@ -1,4 +1,5 @@
 rust_extractor/target/
+yf_quote_worker/target/
 # Logs
 
 logs
