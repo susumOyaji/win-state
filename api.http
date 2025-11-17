@@ -36,11 +36,32 @@ GET {{baseUrl}}/discover-data?code=^DJI
 GET {{baseUrl}}/discover-data?code=USDJPY=X
 
 ###
-# Get Data from yf_quote_worker
+# Get Data from yf_quote_worker (Default: Entire Struct)
 #
 # Fetches stock data using the newly created yf_quote_worker.
-# This worker responds to the root path.
-GET {{baseUrl}}/?code=7203.T,^DJI,USDJPY=X
+# When the 'keys' parameter is omitted, the entire extracted struct is returned.
+GET {{baseUrl}}/?code=7203.T
+
+###
+GET {{baseUrl}}/?code=998407.O
+
+###
+# Get Data from yf_quote_worker (Default: Entire Struct for multiple codes)
+#
+# Fetches stock data for multiple codes, returning the entire extracted struct for each.
+GET {{baseUrl}}/?code=^DJI,USDJPY=X
+
+###
+# Get Specific Keys from yf_quote_worker
+#
+# Fetches only the specified keys (e.g., name and price) for a stock code.
+GET {{baseUrl}}/?code=7203.T&keys=name,price
+
+###
+# Get Different Keys from yf_quote_worker
+#
+# Fetches a different set of specified keys.
+GET {{baseUrl}}/?code=^DJI&keys=code,price,update_time
 
 ###
 # Generate CSS Selectors

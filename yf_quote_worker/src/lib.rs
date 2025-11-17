@@ -13,33 +13,15 @@ fn set_panic_hook() {
 /// Defines a known location for financial data within the __PRELOADED_STATE__ JSON.
 struct DataSource {
     path: &'static [&'static str],
-    code_key: &'static str,
-    name_key: &'static str,
-    price_key: &'static str,
-    change_key: &'static str,
-    change_rate_key: &'static str,
-    time_key: &'static str,
+    mappings: std::collections::HashMap<&'static str, &'static str>,
     strip_suffix: bool,
-}
-
-/// Holds the normalized data extracted from any source.
-#[derive(Serialize, Debug, Clone)]
-struct NormalizedData {
-    code: String,
-    name: String,
-    price: String,
-    price_change: String,
-    price_change_rate: String,
-    update_time: String,
-    status: String,
-    source: String, // e.g., "json_predefined", "json_fallback", "dom"
 }
 
 /// Represents the final JSON response for a single code.
 #[derive(Serialize, Debug)]
 struct CodeResult {
     code: String,
-    data: Option<NormalizedData>,
+    data: Option<Map<String, Value>>,
     error: Option<String>,
 }
 
@@ -49,15 +31,14 @@ pub async fn main(req: Request, _env: Env, _ctx: Context) -> Result<Response> {
     set_panic_hook();
 
     let url = req.url()?;
-    let codes_query = url.query_pairs().find(|(key, _)| key == "code");
+    let query_params: std::collections::HashMap<String, String> = url.query_pairs().into_owned().collect();
 
-    if codes_query.is_none() {
-        return Response::error("Query parameter 'code' is required. e.g., ?code=7203.T,^DJI", 400);
-    }
+    let codes_str = match query_params.get("code") {
+        Some(c) => c,
+        None => return Response::error("Query parameter 'code' is required. e.g., ?code=7203.T,^DJI", 400),
+    };
 
-    let codes: Vec<String> = codes_query
-        .unwrap()
-        .1
+    let codes: Vec<String> = codes_str
         .split(',')
         .filter(|s| !s.is_empty())
         .map(|s| s.trim().to_string())
@@ -67,14 +48,20 @@ pub async fn main(req: Request, _env: Env, _ctx: Context) -> Result<Response> {
         return Response::error("Query parameter 'code' cannot be empty.", 400);
     }
 
-    let futures = codes.iter().map(|code| fetch_single_code(code.clone()));
+    let keys: Option<Vec<String>> = query_params
+        .get("keys")
+        .map(|s| s.split(',').map(|k| k.trim().to_string()).collect());
+
+    let futures = codes
+        .iter()
+        .map(|code| fetch_single_code(code.clone(), keys.clone()));
     let results = join_all(futures).await;
 
     Response::from_json(&results)
 }
 
 /// Fetches and processes data for a single stock code.
-async fn fetch_single_code(code: String) -> CodeResult {
+async fn fetch_single_code(code: String, keys: Option<Vec<String>>) -> CodeResult {
     let url = if code.starts_with('^') || code.contains('=') || code.ends_with(".T") || code.ends_with(".O") {
         format!("https://finance.yahoo.co.jp/quote/{}/", code)
     } else {
@@ -91,7 +78,7 @@ async fn fetch_single_code(code: String) -> CodeResult {
 
     let re = Regex::new(r"(?s)window\.__PRELOADED_STATE__\s*=\s*(.*?)</script>").unwrap();
 
-    let result_data = if let Some(caps) = re.captures(&body) {
+    let result_data: Result<Map<String, Value>> = if let Some(caps) = re.captures(&body) {
         if let Some(json_match) = caps.get(1) {
             let mut json_str = json_match.as_str().trim();
             if json_str.ends_with(';') {
@@ -99,16 +86,16 @@ async fn fetch_single_code(code: String) -> CodeResult {
             }
 
             match serde_json::from_str(json_str) {
-                Ok(data) => process_json_data(&code, &data),
+                Ok(data) => process_json_data(&code, &data, keys.as_ref()),
                 Err(e) => Err(worker::Error::from(format!("Failed to parse JSON: {}", e))),
             }
         } else {
             // JSON not found, fallback to DOM
-            process_dom_data(&code, &body)
+            process_dom_data(&code, &body, keys.as_ref())
         }
     } else {
         // __PRELOADED_STATE__ script not found, fallback to DOM
-        process_dom_data(&code, &body)
+        process_dom_data(&code, &body, keys.as_ref())
     };
 
     match result_data {
@@ -118,39 +105,60 @@ async fn fetch_single_code(code: String) -> CodeResult {
 }
 
 /// Processes the __PRELOADED_STATE__ JSON data to find financial info.
-fn process_json_data(code: &str, data: &Value) -> Result<NormalizedData> {
+fn process_json_data(code: &str, data: &Value, keys: Option<&Vec<String>>) -> Result<Map<String, Value>> {
     let data_sources = get_data_sources();
 
     // 1. Try predefined paths
     for source in &data_sources {
         if let Some(target_obj) = find_object(data, source.path) {
-            if let Some(found_code) = get_string_value(target_obj, source.code_key) {
-                let code_to_compare = if source.strip_suffix {
-                    code.split('.').next().unwrap_or(code)
-                } else {
-                    code
-                };
+            if let Some(json_code_key) = source.mappings.get("code") {
+                 if let Some(found_code) = get_string_value(target_obj, json_code_key) {
+                    let code_to_compare = if source.strip_suffix {
+                        code.split('.').next().unwrap_or(code)
+                    } else {
+                        code
+                    };
 
-                if found_code.trim() == code_to_compare {
-                    return Ok(NormalizedData {
-                        code: code.to_string(),
-                        name: get_string_value(target_obj, source.name_key).unwrap_or("N/A").to_string(),
-                        price: target_obj.get(source.price_key).map_or("N/A".to_string(), |v| v.to_string().trim_matches('"').to_string()),
-                        price_change: target_obj.get(source.change_key).map_or("N/A".to_string(), |v| v.to_string().trim_matches('"').to_string()),
-                        price_change_rate: target_obj.get(source.change_rate_key).map_or("N/A".to_string(), |v| v.to_string().trim_matches('"').to_string()),
-                        update_time: get_string_value(target_obj, source.time_key).unwrap_or("N/A").to_string(),
-                        status: "OK".to_string(),
-                        source: "json_predefined".to_string(),
-                    });
+                    if found_code.trim() == code_to_compare {
+                        let mut results = Map::new();
+                        if let Some(keys_vec) = keys {
+                            for key in keys_vec {
+                                if let Some(json_key) = source.mappings.get(key.as_str()) {
+                                    if let Some(value) = target_obj.get(*json_key) {
+                                        // Convert numbers/booleans to strings for consistency, then re-wrap as Value
+                                        let str_val = value.to_string().trim_matches('"').to_string();
+                                        results.insert(key.clone(), Value::String(str_val));
+                                    }
+                                } else if key == "code" {
+                                    results.insert("code".to_string(), Value::String(code.to_string()));
+                                }
+                            }
+                        } else {
+                            // If keys is None, return the entire target_obj
+                            results = target_obj.clone();
+                            results.insert("code".to_string(), Value::String(code.to_string())); // Ensure code is present
+                        }
+                        results.insert("status".to_string(), Value::String("OK".to_string()));
+                        results.insert("source".to_string(), Value::String("json_predefined".to_string()));
+                        return Ok(results);
+                    }
                 }
             }
         }
     }
 
     // 2. Fallback to generic key search
-    let fallback_keys = vec!["code".to_string(), "name".to_string()];
+    let fallback_keys_to_find = vec!["code".to_string()];
     let mut found_paths = Vec::new();
-    find_object_paths(data, &fallback_keys, &mut Vec::new(), &mut found_paths);
+    find_object_paths(data, &fallback_keys_to_find, &mut Vec::new(), &mut found_paths);
+
+    let fallback_mappings = HashMap::from([
+        ("name", "name"),
+        ("price", "price"),
+        ("price_change", "priceChange"),
+        ("price_change_rate", "priceChangeRate"),
+        ("update_time", "priceDateTime"),
+    ]);
 
     for path in found_paths {
         let mut target_obj = data;
@@ -161,16 +169,26 @@ fn process_json_data(code: &str, data: &Value) -> Result<NormalizedData> {
             if let Some(found_code) = get_string_value(obj_map, "code") {
                 let code_to_compare = code.split('.').next().unwrap_or(code);
                 if found_code.trim() == code_to_compare {
-                    return Ok(NormalizedData {
-                        code: code.to_string(),
-                        name: get_string_value(obj_map, "name").unwrap_or("N/A").to_string(),
-                        price: obj_map.get("price").map_or("N/A".to_string(), |v| v.to_string().trim_matches('"').to_string()),
-                        price_change: obj_map.get("priceChange").map_or("N/A".to_string(), |v| v.to_string().trim_matches('"').to_string()),
-                        price_change_rate: obj_map.get("priceChangeRate").map_or("N/A".to_string(), |v| v.to_string().trim_matches('"').to_string()),
-                        update_time: obj_map.get("priceDateTime").map_or("N/A".to_string(), |v| v.to_string().trim_matches('"').to_string()),
-                        status: "OK".to_string(),
-                        source: "json_fallback".to_string(),
-                    });
+                    let mut results = Map::new();
+                    if let Some(keys_vec) = keys {
+                        for key in keys_vec {
+                            if let Some(json_key) = fallback_mappings.get(key.as_str()) {
+                                if let Some(value) = obj_map.get(*json_key) {
+                                    let str_val = value.to_string().trim_matches('"').to_string();
+                                    results.insert(key.clone(), Value::String(str_val));
+                                }
+                            } else if key == "code" {
+                                results.insert("code".to_string(), Value::String(code.to_string()));
+                            }
+                        }
+                    } else {
+                        // If keys is None, return the entire target_obj
+                        results = obj_map.clone();
+                        results.insert("code".to_string(), Value::String(code.to_string())); // Ensure code is present
+                    }
+                    results.insert("status".to_string(), Value::String("OK".to_string()));
+                    results.insert("source".to_string(), Value::String("json_fallback".to_string()));
+                    return Ok(results);
                 }
             }
         }
@@ -180,58 +198,102 @@ fn process_json_data(code: &str, data: &Value) -> Result<NormalizedData> {
 }
 
 /// Processes the HTML body using CSS selectors as a fallback.
-fn process_dom_data(code: &str, body: &str) -> Result<NormalizedData> {
+fn process_dom_data(code: &str, body: &str, keys: Option<&Vec<String>>) -> Result<Map<String, Value>> {
     let document = Html::parse_document(body);
+    let mut results = Map::new();
 
-    let name_selector = Selector::parse("h1").unwrap();
-    let price_selector = Selector::parse("div[class*='_CommonPriceBoard__priceBlock'] span[class*='_StyledNumber__value']").unwrap();
-    let change_selector = Selector::parse("span[class*='_PriceChangeLabel__primary'] span[class*='_StyledNumber__value']").unwrap();
-    let change_rate_selector = Selector::parse("span[class*='_PriceChangeLabel__secondary'] span[class*='_StyledNumber__value']").unwrap();
-    let time_selector = Selector::parse("li[class*='_CommonPriceBoard__time'] time, span[class*='_Time']").unwrap();
+    // Create a map of known keys to their selectors
+    let mut selector_map = std::collections::HashMap::new();
+    selector_map.insert("name", "h1");
+    selector_map.insert("price", "div[class*='_CommonPriceBoard__priceBlock'] span[class*='_StyledNumber__value']");
+    selector_map.insert("price_change", "span[class*='_PriceChangeLabel__primary'] span[class*='_StyledNumber__value']");
+    selector_map.insert("price_change_rate", "span[class*='_PriceChangeLabel__secondary'] span[class*='_StyledNumber__value']");
+    selector_map.insert("update_time", "li[class*='_CommonPriceBoard__time'] time, span[class*='_Time']");
 
-    let name = document.select(&name_selector).next().map(|el| el.text().collect::<String>().trim().to_string());
-    let price = document.select(&price_selector).next().map(|el| el.text().collect::<String>().trim().to_string());
+    let keys_to_process = if let Some(k) = keys {
+        k.clone()
+    } else {
+        // Default keys if not provided (for DOM, this means all known fields)
+        vec![
+            "code".to_string(),
+            "name".to_string(),
+            "price".to_string(),
+            "price_change".to_string(),
+            "price_change_rate".to_string(),
+            "update_time".to_string(),
+        ]
+    };
 
-    if name.is_none() || price.is_none() {
-        return Err(worker::Error::from("Failed to scrape essential data (name/price) from DOM."));
+    for key in &keys_to_process {
+        let value = match key.as_str() {
+            "code" => Some(code.to_string()),
+            _ => {
+                if let Some(selector_str) = selector_map.get(key.as_str()) {
+                    let selector = Selector::parse(selector_str).unwrap();
+                    document.select(&selector).next().map(|el| el.text().collect::<String>().trim().to_string())
+                } else {
+                    None
+                }
+            }
+        };
+        if let Some(val) = value {
+            results.insert(key.clone(), Value::String(val));
+        }
+    }
+    
+    // Ensure essential keys are present if requested, or if no keys were requested (defaults used)
+    if keys_to_process.contains(&"name".to_string()) && !results.contains_key("name") {
+         return Err(worker::Error::from("Failed to scrape essential data (name) from DOM."));
+    }
+    if keys_to_process.contains(&"price".to_string()) && !results.contains_key("price") {
+         return Err(worker::Error::from("Failed to scrape essential data (price) from DOM."));
     }
 
-    let price_change = document.select(&change_selector).next().map(|el| el.text().collect::<String>().trim().to_string()).unwrap_or("N/A".to_string());
-    let price_change_rate = document.select(&change_rate_selector).next().map(|el| el.text().collect::<String>().trim().to_string()).unwrap_or("N/A".to_string());
-    let update_time = document.select(&time_selector).next().map(|el| el.text().collect::<String>().trim().to_string()).unwrap_or("N/A".to_string());
+    results.insert("status".to_string(), Value::String("OK".to_string()));
+    results.insert("source".to_string(), Value::String("dom_fallback".to_string()));
 
-    Ok(NormalizedData {
-        code: code.to_string(),
-        name: name.unwrap(),
-        price: price.unwrap(),
-        price_change,
-        price_change_rate,
-        update_time,
-        status: "OK".to_string(),
-        source: "dom_fallback".to_string(),
-    })
+    Ok(results)
 }
 
-// --- Helper Functions (mostly unchanged) ---
+use std::collections::HashMap;
+// --- Helper Functions ---
 
 fn get_data_sources() -> Vec<DataSource> {
     vec![
         DataSource {
             path: &["mainStocksPriceBoard", "priceBoard"],
-            code_key: "code", name_key: "name", price_key: "price",
-            change_key: "priceChange", change_rate_key: "priceChangeRate", time_key: "priceDateTime",
+            mappings: HashMap::from([
+                ("code", "code"),
+                ("name", "name"),
+                ("price", "price"),
+                ("price_change", "priceChange"),
+                ("price_change_rate", "priceChangeRate"),
+                ("update_time", "priceDateTime"),
+            ]),
             strip_suffix: true,
         },
         DataSource {
             path: &["mainCurrencyPriceBoard", "currencyPrices"],
-            code_key: "currencyPairCode", name_key: "currencyPairName", price_key: "bid",
-            change_key: "priceChange", change_rate_key: "priceChangeRate", time_key: "priceUpdateTime",
+            mappings: HashMap::from([
+                ("code", "currencyPairCode"),
+                ("name", "currencyPairName"),
+                ("price", "bid"),
+                ("price_change", "priceChange"),
+                ("price_change_rate", "priceChangeRate"),
+                ("update_time", "priceUpdateTime"),
+            ]),
             strip_suffix: false,
         },
         DataSource {
             path: &["mainDomesticIndexPriceBoard", "indexPrices"],
-            code_key: "code", name_key: "name", price_key: "price",
-            change_key: "changePrice", change_rate_key: "changePriceRate", time_key: "japanUpdateTime",
+            mappings: HashMap::from([
+                ("code", "code"),
+                ("name", "name"),
+                ("price", "price"),
+                ("price_change", "changePrice"),
+                ("price_change_rate", "changePriceRate"),
+                ("update_time", "japanUpdateTime"),
+            ]),
             strip_suffix: false,
         },
     ]

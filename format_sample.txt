@@ -1,0 +1,53 @@
+================ FOUND OBJECTS AND THEIR STRUCT DEFINITIONS ================
+"mainStocksPriceBoard": {
+  "priceBoard": {
+    // --- Extracted Values ---
+      code = "5016";
+      name = "ＪＸ金属(株)";
+    // --- Struct Definition ---
+    #[derive(Debug, serde::Deserialize)]
+    pub struct PriceBoard {
+        pub code: Option<String>,
+        pub codeWithMarketExtension: Option<String>,
+        pub displayName: Option<String>,
+        pub dps: Option<i64>,
+        pub dpsPeriod: Option<String>,
+        pub industry: Option<Industry>,
+        pub isLatest: Option<bool>,
+        pub marketDetailCode: Option<String>,
+        pub marketName: Option<String>,
+        pub name: Option<String>,
+        pub otherExchanges: Option<Vec<String>>,
+        pub pressReleaseDate: Option<String>,
+        pub price: Option<String>,
+        pub priceChange: Option<String>,
+        pub priceChangeRate: Option<String>,
+        pub priceDateTime: Option<String>,
+        pub realFlag: Option<bool>,
+        pub savePrice: Option<String>,
+        pub shareDividendYield: Option<f64>,
+        pub shareDividendYieldTime: Option<String>,
+        pub shortName: Option<String>,
+        pub stockType: Option<String>,
+        pub tabInfo: Option<Vec<String>>,
+        pub typeDetail: Option<String>,
+        pub usStock: Option<UsStock>,
+        pub yearHighPriceFlag: Option<bool>,
+        pub yearLowPriceFlag: Option<bool>,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    pub struct Industry {
+        pub industryItemsLink: Option<String>,
+        pub industryName: Option<String>,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    pub struct UsStock {
+        pub usLink: Option<String>,
+        pub usMarketName: Option<String>,
+        pub usPrice: Option<String>,
+    }
+
+  }
+}
