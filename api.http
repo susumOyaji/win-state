@@ -59,3 +59,4 @@ GET {{baseUrl}}/generate-selectors?url={{targetUrl}}&text={{targetText}}
 @verifySelector = h1
 GET {{baseUrl}}/verify-selector?url={{verifyUrl}}&selector={{verifySelector}}
 
+# cd rust_extractor    cargo run -- https://finance.yahoo.co.jp/quote/5016.T --key code --key name --display-key code  --display-key name
