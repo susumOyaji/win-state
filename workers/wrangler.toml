@@ -1,4 +1,4 @@
-name = "yf-quote-worker"
+name = "workers"
 main = "build/worker/shim.mjs"
 compatibility_date = "2024-03-20"
 

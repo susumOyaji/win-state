@@ -36,29 +36,32 @@ GET {{baseUrl}}/discover-data?code=^DJI
 GET {{baseUrl}}/discover-data?code=USDJPY=X
 
 ###
-# Get Data from yf_quote_worker (Default: Entire Struct)
+# Get Data from worker (Default: Entire Struct)
 #
-# Fetches stock data using the newly created yf_quote_worker.
+# Fetches stock data using the newly created worker.
 # When the 'keys' parameter is omitted, the entire extracted struct is returned.
 GET {{baseUrl}}/?code=7203.T
+
+###
+GET {{baseUrl}}/?code=5016.T
 
 ###
 GET {{baseUrl}}/?code=998407.O
 
 ###
-# Get Data from yf_quote_worker (Default: Entire Struct for multiple codes)
+# Get Data from worker (Default: Entire Struct for multiple codes)
 #
 # Fetches stock data for multiple codes, returning the entire extracted struct for each.
-GET {{baseUrl}}/?code=^DJI,USDJPY=X
+GET {{baseUrl}}/?code=^DJI,USDJPY=X,998407.O,6758.T,8729.T,5016.T,4755.T
 
 ###
-# Get Specific Keys from yf_quote_worker
+# Get Specific Keys from worker
 #
 # Fetches only the specified keys (e.g., name and price) for a stock code.
 GET {{baseUrl}}/?code=7203.T&keys=name,price
 
 ###
-# Get Different Keys from yf_quote_worker
+# Get Different Keys from worker
 #
 # Fetches a different set of specified keys.
 GET {{baseUrl}}/?code=^DJI&keys=code,price,update_time
